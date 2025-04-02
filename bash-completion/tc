@@ -3,7 +3,7 @@
 # Copyright 2016 Quentin Monnet <quentin.monnet@6wind.com>
 
 QDISC_KIND=' choke codel bfifo pfifo pfifo_head_drop fq fq_codel gred hhf \
-            mqprio multiq netem pfifo_fast pie fq_pie red sfb sfq tbf \
+            mqprio multiq netem dlc pfifo_fast pie fq_pie red sfb sfq tbf \
             drr hfsc htb prio qfq '
 FILTER_KIND=' basic bpf cgroup flow flower fw route u32 matchall '
 ACTION_KIND=' gact mirred bpf sample '
@@ -317,6 +317,11 @@ _tc_qdisc_options()
         netem)
             _tc_once_attr 'delay distribution corrupt duplicate loss ecn \
                 reorder rate'
+            return 0
+            ;;
+        dlc)
+            _tc_once_attr 'delay (mean jitter [jitter_steps] [distribution]) loss mu \
+                mean_burst_len mean_good_burst_len rate limit'
             return 0
             ;;
         pie)

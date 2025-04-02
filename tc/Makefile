@@ -16,6 +16,7 @@ TCMODULES += q_skbprio.o
 TCMODULES += q_tbf.o
 TCMODULES += q_multiq.o
 TCMODULES += q_netem.o
+TCMODULES += q_dlc.o
 TCMODULES += q_choke.o
 TCMODULES += q_sfb.o
 TCMODULES += f_u32.o

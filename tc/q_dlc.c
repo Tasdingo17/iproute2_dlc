@@ -21,10 +21,15 @@
 #include "tc_common.h"
 #include "q_dlc_spec.h"
 
+#define MAX_JITTER_STEPS 32
+
+// Note: check dlc_queue_state_v2
+#define RHO_SCALE 10000
+
 static void explain(void)
 {
     fprintf(stderr,
-        "Usage: ... dlc_qdisc [ limit PACKETS ]\n"
+        "Usage: ... dlc [ limit PACKETS ]\n"
         "                 [ delay TIME JITTER [JITTER_STEPS] ]\n"
         "                 [ distribution {uniform|normal|pareto|paretonormal} ]\n"
         "                 [ loss PERCENT ]\n"
@@ -170,30 +175,63 @@ static int get_distribution(const char *type, __s16 *data, int maxdata)
     (NEXT_ARG_OK() && (isdigit(argv[1][0]) || argv[1][0] == '-'))
 
 
-static __u32 _adjust_jitter_steps(__s64 latency, __s64 jitter, __u32 old_jitter_steps, double loss_perc, double mu_perc){
-    // pi1 + pi2 + pi3 = 1; markov chain states probabilities
-    double pi2 = mu_perc * (1 - loss_perc);
-    double pi1 = (1 - loss_perc) * (1 - mu_perc);
-
-    __u32 new_steps = old_jitter_steps;
-    __s64 step = jitter / new_steps;
-    double q_mean_delay = (latency - pi1 * (latency - step)) / pi2;
-    while ((__s64) q_mean_delay > (latency +jitter)){
-        new_steps += 1;
-        step = jitter / new_steps;
-        q_mean_delay = (latency - pi1 * (latency - step)) / pi2;
-    }
-    if (new_steps != old_jitter_steps){
-        fprintf(stderr, "Warning: increase jitter_step=%d to adjust mean_delay in queue_state", new_steps);
-    }
-
-    return new_steps;
+static double scale(double x, double target_l, double target_r, double src_l, double src_r){
+    return target_l + (x - src_l) * (target_r - target_l) / (src_r - src_l);
 }
 
+
 struct MM1CalcParams {
+    double jitter_step;
     __u32 j_steps;
     double offset;
+    double d1;
+    double d2;
+    double d3;
 };
+
+
+static struct MM1CalcParams get_mm1_calc_params(__s64 latency, __s64 jitter, __u32 old_jitter_steps, double loss_perc, double mu_perc){
+    // pi1 + pi2 + pi3 = 1; markov chain states probabilities
+    double pi3 = loss_perc;
+    double pi2 = mu_perc * (1 - loss_perc);
+    double pi1 = (1 - loss_perc) * (1 - mu_perc);
+    //fprintf(stderr, "[tc] Debug: pi1=%f, pi2=%f, pi3=%f\n", pi1, pi2, pi3);
+
+    __u32 new_steps = old_jitter_steps;
+    double step = (1.* jitter) / new_steps;
+    double d2 = (latency - pi1 * (latency - step) - pi3 * (latency + jitter)) / pi2;
+    double d2_init = d2;
+    double d1 = latency - step;
+    double d1_init = d1;
+
+    struct MM1CalcParams res;
+
+    while (((__s64) d2 > (latency + jitter)) && (new_steps < MAX_JITTER_STEPS)){
+        //fprintf(stderr, "[tc] Debug: s_64 q_mean_delay=%lld\n", (__s64) q_mean_delay);
+        new_steps += 1;
+        step = jitter / new_steps;
+        d2 = (latency - pi1 * (latency - step) - pi3 * (latency + jitter)) / pi2;
+    }
+
+    if ((__s64)d2 >= (latency + jitter)){
+        fprintf(stderr, "Warning: scaling state delays\n");
+        d2 = scale(d2, latency, latency+jitter, latency, d2_init);
+        d1 = scale(latency-step, latency-jitter, latency, d1_init, latency);
+        step = min(latency - d1, d1 - (latency - jitter));
+        new_steps = (__u32) (jitter / step);
+    }
+    if (new_steps != old_jitter_steps){
+        fprintf(stderr, "Warning: increase jitter_step=%d to adjust mean_delay in queue_state\n", new_steps);
+    }
+
+    res.jitter_step = step;
+    res.j_steps = new_steps;
+    res.offset = (d2 - latency) / step;
+    res.d1 = d1;
+    res.d2 = d2;
+    res.d3 = latency + jitter;
+    return res;
+}
 
 
 static double newton_method(double (*f)(double, const struct MM1CalcParams*),
@@ -213,7 +251,7 @@ static double newton_method(double (*f)(double, const struct MM1CalcParams*),
         x = x - fx/dfx;
     }
     if (!(fabs(fx) < tolerance)){
-        fprintf(stderr, "Warning: newton method for mm1k_rho didn't converge");
+        fprintf(stderr, "Warning: newton method for mm1k_rho didn't converge\n");
     }
     return x;
 };
@@ -231,21 +269,11 @@ static double derivative(double x, const struct MM1CalcParams* params) {
     return term1 - term2 - term3;
 };
 
-static __u32 _calc_mm1k_rho(__s64 latency, __s64 jitter, __u32 jitter_steps, double loss_perc, double mu_perc){
-    // pi1 + pi2 + pi3 = 1; markov chain states probabilities
-    double pi2 = mu_perc * (1 - loss_perc);
-    double pi1 = (1 - loss_perc) * (1 - mu_perc);
-    __s64 step = jitter / jitter_steps;
-    double q_mean_delay = (latency - pi1 * (latency - step)) / pi2;
-    struct MM1CalcParams params = {
-        .j_steps = jitter_steps,
-        .offset = (q_mean_delay - latency) / step
-    };
-
+static __u32 calc_mm1k_rho(struct MM1CalcParams params){
     double init_guess = 0.5;
     double tolerance = 0.000001;
     int max_iter = 10000;
-    return (__u32) newton_method(func, derivative, &params, init_guess, tolerance, max_iter);
+    return (__u32) (newton_method(func, derivative, &params, init_guess, tolerance, max_iter) * RHO_SCALE);
 }
 
 static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
@@ -253,12 +281,13 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
 {
     int dist_size = 0;
     struct rtattr *tail;
-    struct tc_dlc_qopt opt = { .limit = 1000, .jitter_steps = 16 };
+    struct tc_dlc_qopt opt = { .limit = 1000, .jitter_steps = 10 };
     __s16 *dist_data = NULL;
     int present[__TCA_DLC_MAX] = {};
     __s64 latency64 = 0;
     __s64 jitter64 = 0;
     __u64 rate64 = 0;
+    struct MM1CalcParams mm1_calc_params;
 
     double loss_perc = 0, mu_perc = 0;  // for internal calculations, vals in [0, 1]
 
@@ -362,6 +391,9 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
         }
     }
 
+    fprintf(stderr, "[tc] Debug: Parsed parameters: limit=%d, latency=%lld, jitter=%lld, jitter_steps=%u, loss=%f, mu=%f, mean_burst_len=%u, mean_g_burst_len=%u, rate=%llu\n", 
+        opt.limit, latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc, opt.mean_burst_len, opt.mean_good_burst_len, rate64);
+
     tail = NLMSG_TAIL(n);
 
     if (dist_data && (latency64 == 0 || jitter64 == 0)) {
@@ -370,8 +402,12 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
         return -1;
     }
 
-    opt.jitter_steps = _adjust_jitter_steps(latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc);
-    opt.mm1_rho = _calc_mm1k_rho(latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc);
+    mm1_calc_params = get_mm1_calc_params(latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc);
+    opt.jitter_steps = mm1_calc_params.j_steps;
+    fprintf(stderr, "[tc] Debug: calculated d1=%f, d2=%f, d3=%f, j_steps=%u, step=%f, offset=%f\n",
+        mm1_calc_params.d1, mm1_calc_params.d2, mm1_calc_params.d3, mm1_calc_params.j_steps, mm1_calc_params.jitter_step, mm1_calc_params.offset);
+    opt.mm1_rho = calc_mm1k_rho(mm1_calc_params);
+    fprintf(stderr, "[tc] Debug: calculated mm1_rho=%u\n", opt.mm1_rho);
 
     if (addattr_l(n, 1024, TCA_OPTIONS, &opt, sizeof(opt)) < 0)
         return -1;
@@ -402,6 +438,8 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
     }
 
     tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
+
+    fprintf(stderr, "[tc] Debug: formed netlink message");
     return 0;
 }
 

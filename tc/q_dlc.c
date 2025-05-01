@@ -394,8 +394,6 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
     fprintf(stderr, "[tc] Debug: Parsed parameters: limit=%d, latency=%lld, jitter=%lld, jitter_steps=%u, loss=%f, mu=%f, mean_burst_len=%u, mean_g_burst_len=%u, rate=%llu\n", 
         opt.limit, latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc, opt.mean_burst_len, opt.mean_good_burst_len, rate64);
 
-    tail = NLMSG_TAIL(n);
-
     if (dist_data && (latency64 == 0 || jitter64 == 0)) {
         fprintf(stderr, "distribution specified but no latency and jitter values\n");
         explain();
@@ -409,25 +407,27 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
     opt.mm1_rho = calc_mm1k_rho(mm1_calc_params);
     fprintf(stderr, "[tc] Debug: calculated mm1_rho=%u\n", opt.mm1_rho);
 
+    tail = NLMSG_TAIL(n);
+
     if (addattr_l(n, 1024, TCA_OPTIONS, &opt, sizeof(opt)) < 0)
         return -1;
+    fprintf(stderr, "[tc] Debug: add opt\n");
 
     if (present[TCA_DLC_LATENCY64] &&
         addattr_l(n, 1024, TCA_DLC_LATENCY64, &latency64, sizeof(latency64)) < 0)
         return -1;
+    fprintf(stderr, "[tc] Debug: latency64\n");
 
     if (present[TCA_DLC_JITTER64] &&
         addattr_l(n, 1024, TCA_DLC_JITTER64, &jitter64, sizeof(jitter64)) < 0)
         return -1;
+    fprintf(stderr, "[tc] Debug: jitter64\n");
     
-    if (rate64 >= (1ULL << 32)) {
-        if (addattr_l(n, 1024, TCA_DLC_RATE64, &rate64, sizeof(rate64)) < 0){
-            return -1;
-        }
-        opt.rate = ~0U;
-    } else {
-        opt.rate = rate64;
+    if (present[TCA_DLC_RATE64] &&
+        addattr_l(n, 1024, TCA_DLC_RATE64, &rate64, sizeof(rate64)) < 0){
+        return -1;
     }
+    fprintf(stderr, "[tc] Debug: rate\n");
 
     if (dist_data) {
         if (addattr_l(n, MAX_DIST * sizeof(dist_data[0]),
@@ -435,11 +435,12 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
                   dist_data, dist_size * sizeof(dist_data[0])) < 0)
             return -1;
         free(dist_data);
+        fprintf(stderr, "[tc] Debug: dist_data\n");
     }
 
     tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
 
-    fprintf(stderr, "[tc] Debug: formed netlink message");
+    fprintf(stderr, "[tc] Debug: formed netlink message\n");
     return 0;
 }
 

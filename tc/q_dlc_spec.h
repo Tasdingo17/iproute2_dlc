@@ -38,6 +38,7 @@ struct tc_dlc_model {
 };
 
 enum {
+    MC_STATE_CONST,
     MC_STATE_SIMPLE,
     MC_STATE_QUEUE,
     MC_STATE_LOSS,

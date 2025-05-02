@@ -277,6 +277,24 @@ static __u32 calc_mm1k_rho(struct MM1CalcParams params){
     return (__u32) (newton_method(func, derivative, &params, init_guess, tolerance, max_iter) * DLC_PROB_SCALE);
 }
 
+
+static bool validate(
+    double loss_perc,
+    double mu_perc,
+    __u32 e_b,
+    __u32 e_gb,
+    __s64 latency,
+    __s64 jitter
+){
+    bool is_valid1 = mu_perc * e_b - e_gb * (1. / (1 - loss_perc) - 1) > 0;
+    if (!is_valid1){
+        fprintf(stderr, "Validation_error: mu * mean_burst_len - mean_good_burst_len * (1 / (1-p_loss) - 1) must be > 0\n");
+        return false;
+    }
+    return true;
+}
+
+
 static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
                struct nlmsghdr *n, const char *dev)
 {
@@ -396,6 +414,10 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
 
     fprintf(stderr, "[tc] Debug: Parsed parameters: limit=%d, latency=%lld, jitter=%lld, jitter_steps=%u, loss=%f, mu=%f, mean_burst_len=%u, mean_g_burst_len=%u, rate=%llu\n", 
         opt.limit, latency64, jitter64, opt.jitter_steps, loss_perc, mu_perc, opt.mean_burst_len, opt.mean_good_burst_len, rate64);
+
+    if (!validate(loss_perc, mu_perc, opt.mean_burst_len, opt.mean_good_burst_len, latency64, jitter64)){
+        return -1;
+    }
 
     if (dist_data && (latency64 == 0 || jitter64 == 0)) {
         fprintf(stderr, "distribution specified but no latency and jitter values\n");

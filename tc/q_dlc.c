@@ -24,7 +24,8 @@
 #define MAX_JITTER_STEPS 32
 
 // Note: check dlc_queue_state_v2
-#define RHO_SCALE 10000
+// 100% = DLC_PROB_SCALE
+#define DLC_PROB_SCALE 100000 
 
 static void explain(void)
 {
@@ -273,7 +274,7 @@ static __u32 calc_mm1k_rho(struct MM1CalcParams params){
     double init_guess = 0.5;
     double tolerance = 0.000001;
     int max_iter = 10000;
-    return (__u32) (newton_method(func, derivative, &params, init_guess, tolerance, max_iter) * RHO_SCALE);
+    return (__u32) (newton_method(func, derivative, &params, init_guess, tolerance, max_iter) * DLC_PROB_SCALE);
 }
 
 static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
@@ -330,24 +331,26 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
             
         } else if (matches(*argv, "loss") == 0 || matches(*argv, "drop") == 0) {
             NEXT_ARG();
-            if (get_percent(&opt.loss, *argv)) {
+            // if (get_percent(&opt.loss, *argv)) {
+            //    explain1("loss percent");
+            //    return -1;
+            //}
+            if (parse_percent(&loss_perc, *argv)){
                 explain1("loss percent");
                 return -1;
             }
-            if (parse_percent(&loss_perc, *argv)){
-                return -1;
-            }
-            
+            opt.loss = (__u32) (loss_perc * DLC_PROB_SCALE);
         } else if (matches(*argv, "mu") == 0) {
             NEXT_ARG();
-            if (get_percent(&opt.mu, *argv)) {
+            //if (get_percent(&opt.mu, *argv)) {
+            //    explain1("mu");
+            //    return -1;
+            //}
+            if (parse_percent(&mu_perc, *argv)){
                 explain1("mu");
                 return -1;
             }
-            if (parse_percent(&mu_perc, *argv)){
-                return -1;
-            }
-            
+            opt.mu = (__u32) (mu_perc * DLC_PROB_SCALE);
         } else if (matches(*argv, "mean_burst_len") == 0) {
             NEXT_ARG();
             if (get_u32(&opt.mean_burst_len, *argv, 0)) {
@@ -411,23 +414,19 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
 
     if (addattr_l(n, 1024, TCA_OPTIONS, &opt, sizeof(opt)) < 0)
         return -1;
-    fprintf(stderr, "[tc] Debug: add opt\n");
 
     if (present[TCA_DLC_LATENCY64] &&
         addattr_l(n, 1024, TCA_DLC_LATENCY64, &latency64, sizeof(latency64)) < 0)
         return -1;
-    fprintf(stderr, "[tc] Debug: latency64\n");
 
     if (present[TCA_DLC_JITTER64] &&
         addattr_l(n, 1024, TCA_DLC_JITTER64, &jitter64, sizeof(jitter64)) < 0)
         return -1;
-    fprintf(stderr, "[tc] Debug: jitter64\n");
     
     if (present[TCA_DLC_RATE64] &&
         addattr_l(n, 1024, TCA_DLC_RATE64, &rate64, sizeof(rate64)) < 0){
         return -1;
     }
-    fprintf(stderr, "[tc] Debug: rate\n");
 
     if (dist_data) {
         if (addattr_l(n, MAX_DIST * sizeof(dist_data[0]),
@@ -435,12 +434,9 @@ static int dlc_parse_opt(const struct qdisc_util *qu, int argc, char **argv,
                   dist_data, dist_size * sizeof(dist_data[0])) < 0)
             return -1;
         free(dist_data);
-        fprintf(stderr, "[tc] Debug: dist_data\n");
     }
 
     tail->rta_len = (void *) NLMSG_TAIL(n) - (void *) tail;
-
-    fprintf(stderr, "[tc] Debug: formed netlink message\n");
     return 0;
 }
 
@@ -489,30 +485,30 @@ static int dlc_print_opt(const struct qdisc_util *qu, FILE *f, struct rtattr *op
 
         }
 
-        if (tb[TCA_DLC_MODEL]) {
-            if (RTA_PAYLOAD(tb[TCA_DLC_MODEL]) < sizeof(*model))
-                return -1;
-            model = RTA_DATA(tb[TCA_DLC_MODEL]);
-        }
-        if (tb[TCA_MARKOV_CHAIN]) {
-            struct rtattr *lb[MC_STATE_MAX + 1];
-            parse_rtattr_nested(lb, MC_STATE_MAX, tb[TCA_MARKOV_CHAIN]);
-            if (lb[MC_STATE_SIMPLE]){
-                if (RTA_PAYLOAD(tb[MC_STATE_SIMPLE]) < sizeof(*simple_state))
-                    return -1;
-                simple_state = RTA_DATA(lb[MC_STATE_SIMPLE]);
-            }
-            if (lb[MC_STATE_QUEUE]){
-                if (RTA_PAYLOAD(tb[MC_STATE_QUEUE]) < sizeof(*queue_state))
-                    return -1;
-                queue_state = RTA_DATA(lb[MC_STATE_QUEUE]);
-            }
-            if (lb[MC_STATE_LOSS]){
-                if (RTA_PAYLOAD(tb[MC_STATE_LOSS]) < sizeof(*loss_state))
-                    return -1;
-                loss_state = RTA_DATA(lb[MC_STATE_LOSS]);
-            }
-        }
+        // if (tb[TCA_DLC_MODEL]) {
+        //     if (RTA_PAYLOAD(tb[TCA_DLC_MODEL]) < sizeof(*model))
+        //         return -1;
+        //     model = RTA_DATA(tb[TCA_DLC_MODEL]);
+        // }
+        // if (tb[TCA_MARKOV_CHAIN]) {
+        //     struct rtattr *lb[MC_STATE_MAX + 1];
+        //     parse_rtattr_nested(lb, MC_STATE_MAX, tb[TCA_MARKOV_CHAIN]);
+        //     if (lb[MC_STATE_SIMPLE]){
+        //         if (RTA_PAYLOAD(tb[MC_STATE_SIMPLE]) < sizeof(*simple_state))
+        //             return -1;
+        //         simple_state = RTA_DATA(lb[MC_STATE_SIMPLE]);
+        //     }
+        //     if (lb[MC_STATE_QUEUE]){
+        //         if (RTA_PAYLOAD(tb[MC_STATE_QUEUE]) < sizeof(*queue_state))
+        //             return -1;
+        //         queue_state = RTA_DATA(lb[MC_STATE_QUEUE]);
+        //     }
+        //     if (lb[MC_STATE_LOSS]){
+        //         if (RTA_PAYLOAD(tb[MC_STATE_LOSS]) < sizeof(*loss_state))
+        //             return -1;
+        //         loss_state = RTA_DATA(lb[MC_STATE_LOSS]);
+        //     }
+        // }
 
     }
 
@@ -525,43 +521,41 @@ static int dlc_print_opt(const struct qdisc_util *qu, FILE *f, struct rtattr *op
         PRINT_PERCENT("mu", qopt.mu);
         print_uint(PRINT_JSON, "mean_burst_len", NULL, qopt.mean_burst_len);
         print_uint(PRINT_JSON, "mean_burst_len", NULL, qopt.mean_good_burst_len);
-
-        rate64 = rate64 ? : qopt.rate;
         tc_print_rate(PRINT_JSON, "rate", " rate %s", rate64);
         print_uint(PRINT_JSON, "limit", NULL, qopt.limit);
     close_json_object();
 
-    if (model == NULL){
-        printf("Error: failed to get a dlc_model for print");
-        return 0;
-    }
-    open_json_object("main_chain");
-        print_uint(PRINT_JSON, "num_states", NULL, model->mc_num_states);
-        print_uint(PRINT_JSON, "curr_state", NULL, model->mc_curr_state);
-        print_uint(PRINT_JSON, "delaydist_size", NULL, model->delaydist_size);
-        open_json_array(PRINT_JSON, "states");
-        if (simple_state != NULL){
-            open_json_object("simple_state");
-                print_float(PRINT_JSON, "delay", NULL, (double) simple_state->delay / 1000000000.);
-                print_float(PRINT_JSON, "jitter", NULL, (double) simple_state->jitter / 1000000000.);
-                print_uint(PRINT_JSON, "delaydist_size", NULL, simple_state->delaydist_size);
-                print_transition_probs(simple_state->trans_probs);
-            close_json_object();
-        }
-        if (queue_state != NULL){
-            open_json_object("queue_state");
-                print_uint(PRINT_JSON, "mm1k_num_states", NULL, queue_state->mm1k_num_states);
-                print_transition_probs(queue_state->trans_probs);
-            close_json_object();
-        }
-        if (loss_state != NULL){
-            open_json_object("loss_state");
-                print_float(PRINT_JSON, "delay", NULL, (double) loss_state->max_delay / 1000000000.);
-                print_transition_probs(loss_state->trans_probs);
-            close_json_object();
-        }
-        close_json_array(PRINT_JSON, ",\n");
-    close_json_object();
+    // if (model == NULL){
+    //    printf("Error: failed to get a dlc_model for print");
+    //    return 0;
+    // }
+    // open_json_object("main_chain");
+    //     print_uint(PRINT_JSON, "num_states", NULL, model->mc_num_states);
+    //     print_uint(PRINT_JSON, "curr_state", NULL, model->mc_curr_state);
+    //     print_uint(PRINT_JSON, "delaydist_size", NULL, model->delaydist_size);
+    //     open_json_array(PRINT_JSON, "states");
+    //     if (simple_state != NULL){
+    //         open_json_object("simple_state");
+    //             print_float(PRINT_JSON, "delay", NULL, (double) simple_state->delay / 1000000000.);
+    //             print_float(PRINT_JSON, "jitter", NULL, (double) simple_state->jitter / 1000000000.);
+    //             print_uint(PRINT_JSON, "delaydist_size", NULL, simple_state->delaydist_size);
+    //             print_transition_probs(simple_state->trans_probs);
+    //         close_json_object();
+    //     }
+    //     if (queue_state != NULL){
+    //         open_json_object("queue_state");
+    //             print_uint(PRINT_JSON, "mm1k_num_states", NULL, queue_state->mm1k_num_states);
+    //             print_transition_probs(queue_state->trans_probs);
+    //         close_json_object();
+    //     }
+    //     if (loss_state != NULL){
+    //         open_json_object("loss_state");
+    //             print_float(PRINT_JSON, "delay", NULL, (double) loss_state->max_delay / 1000000000.);
+    //             print_transition_probs(loss_state->trans_probs);
+    //         close_json_object();
+    //     }
+    //     close_json_array(PRINT_JSON, ",\n");
+    // close_json_object();
 
     return 0;
 }
